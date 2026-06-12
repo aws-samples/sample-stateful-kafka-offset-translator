@@ -1,0 +1,179 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Base infrastructure for the offset-translator demo: an S3 bucket, an IAM role
+  for Glue, and a Glue NETWORK connection into the MSK VPC. The Glue jobs are in
+  a sibling stack (infra-jobs.yaml) so that the Glue script can be uploaded to
+  the bucket between the two deployments. CloudFormation's early validation
+  refuses to create AWS::Glue::Job resources whose ScriptLocation does not yet
+  exist.
+
+Parameters:
+
+  ProjectName:
+    Type: String
+    Default: offset-translator-demo
+
+  SourceClusterArn:
+    Type: String
+    Default: arn:aws:kafka:us-east-1:216729979177:cluster/Source-MSKCluster-msk-labs-default/1e4b76fd-0e21-40d3-8c77-d211f185aba7-9
+
+  TargetClusterArn:
+    Type: String
+    Default: arn:aws:kafka:us-east-1:216729979177:cluster/Target-MSKCluster-msk-labs-default/55753e20-31a8-4a92-a1b0-843e270c377b-9
+
+  GlueSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-04fa4ab4df830ab64
+
+  GlueAvailabilityZone:
+    Type: String
+    Default: us-east-1a
+
+  GlueVpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-01884526e588ec0c0
+    Description: VPC for the Glue ENIs - must contain GlueSubnetId.
+
+Resources:
+
+  GlueSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${ProjectName}-glue-sg
+      GroupDescription: Glue Streaming workers - self-referencing all-ports ingress required by Glue NETWORK connections.
+      VpcId: !Ref GlueVpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all egress (Kafka brokers, S3 endpoint, AWS APIs).
+
+  GlueSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref GlueSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref GlueSecurityGroup
+      Description: Glue requires self-referencing all-ports ingress on the connection SG.
+
+  BrokerIngressFromGlue:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: sg-0f8e1d0791497d064
+      IpProtocol: tcp
+      FromPort: 9098
+      ToPort: 9098
+      SourceSecurityGroupId: !Ref GlueSecurityGroup
+      Description: Allow Glue workers to reach MSK brokers on the IAM port.
+
+  DemoBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${ProjectName}-${AWS::AccountId}-${AWS::Region}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteMpu
+            Status: Enabled
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 }
+
+  GlueRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-glue-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: glue.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: BucketRW
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:AbortMultipartUpload
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                  - s3:GetBucketLocation
+                Resource:
+                  - !GetAtt DemoBucket.Arn
+                  - !Sub ${DemoBucket.Arn}/*
+        - PolicyName: KafkaClusterAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kafka-cluster:Connect
+                  - kafka-cluster:DescribeCluster
+                  - kafka-cluster:AlterCluster
+                  - kafka-cluster:DescribeClusterDynamicConfiguration
+                Resource:
+                  - !Ref SourceClusterArn
+                  - !Ref TargetClusterArn
+              - Effect: Allow
+                Action:
+                  - kafka-cluster:DescribeTopic
+                  - kafka-cluster:ReadData
+                  - kafka-cluster:WriteData
+                  - kafka-cluster:CreateTopic
+                  - kafka-cluster:AlterTopic
+                Resource:
+                  - !Sub
+                    - arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:topic/${ClusterName}/${ClusterId}/*
+                    - ClusterName: !Select [1, !Split ['/', !Ref SourceClusterArn]]
+                      ClusterId:   !Select [2, !Split ['/', !Ref SourceClusterArn]]
+                  - !Sub
+                    - arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:topic/${ClusterName}/${ClusterId}/*
+                    - ClusterName: !Select [1, !Split ['/', !Ref TargetClusterArn]]
+                      ClusterId:   !Select [2, !Split ['/', !Ref TargetClusterArn]]
+              - Effect: Allow
+                Action:
+                  - kafka-cluster:AlterGroup
+                  - kafka-cluster:DescribeGroup
+                Resource:
+                  - !Sub
+                    - arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:group/${ClusterName}/${ClusterId}/*
+                    - ClusterName: !Select [1, !Split ['/', !Ref SourceClusterArn]]
+                      ClusterId:   !Select [2, !Split ['/', !Ref SourceClusterArn]]
+                  - !Sub
+                    - arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:group/${ClusterName}/${ClusterId}/*
+                    - ClusterName: !Select [1, !Split ['/', !Ref TargetClusterArn]]
+                      ClusterId:   !Select [2, !Split ['/', !Ref TargetClusterArn]]
+
+  GlueNetworkConnection:
+    Type: AWS::Glue::Connection
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      ConnectionInput:
+        Name: !Sub ${ProjectName}-msk-vpc
+        ConnectionType: NETWORK
+        PhysicalConnectionRequirements:
+          SubnetId: !Ref GlueSubnetId
+          AvailabilityZone: !Ref GlueAvailabilityZone
+          SecurityGroupIdList:
+            - !Ref GlueSecurityGroup
+
+Outputs:
+  BucketName:
+    Value: !Ref DemoBucket
+    Export: { Name: !Sub '${AWS::StackName}-BucketName' }
+  GlueRoleArn:
+    Value: !GetAtt GlueRole.Arn
+    Export: { Name: !Sub '${AWS::StackName}-GlueRoleArn' }
+  GlueConnectionName:
+    Value: !Ref GlueNetworkConnection
+    Export: { Name: !Sub '${AWS::StackName}-GlueConnectionName' }

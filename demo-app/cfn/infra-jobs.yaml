@@ -1,0 +1,125 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Glue Streaming jobs for the offset-translator demo. Deploy AFTER the base stack
+  (infra-base.yaml) and AFTER the Glue script + MSK IAM auth jar have been
+  uploaded to the bucket created by the base stack. Both jobs share a script;
+  only the bootstrap servers and checkpoint location differ.
+
+Parameters:
+
+  BaseStackName:
+    Type: String
+    Default: offset-translator-demo-base
+    Description: Name of the base stack exporting BucketName, GlueRoleArn, GlueConnectionName.
+
+  ProjectName:
+    Type: String
+    Default: offset-translator-demo
+
+  SourceBootstrapIam:
+    Type: String
+    Default: b-3.sourcemskclustermsklab.p9o6zq.c9.kafka.us-east-1.amazonaws.com:9098,b-1.sourcemskclustermsklab.p9o6zq.c9.kafka.us-east-1.amazonaws.com:9098,b-2.sourcemskclustermsklab.p9o6zq.c9.kafka.us-east-1.amazonaws.com:9098
+
+  TargetBootstrapIam:
+    Type: String
+    Default: boot-irn.targetmskclustermsklab.bdetn6.c9.kafka.us-east-1.amazonaws.com:9098,boot-1hu.targetmskclustermsklab.bdetn6.c9.kafka.us-east-1.amazonaws.com:9098,boot-5a2.targetmskclustermsklab.bdetn6.c9.kafka.us-east-1.amazonaws.com:9098
+
+  KafkaTopic:
+    Type: String
+    Default: demo-clickstream
+
+  ScriptKey:
+    Type: String
+    Default: scripts/stream_kafka_to_s3.py
+
+  IamAuthJarKey:
+    Type: String
+    Default: jars/aws-msk-iam-auth-2.2.0-all.jar
+
+Resources:
+
+  PhaseOneJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub ${ProjectName}-phase1-source
+      Role:
+        Fn::ImportValue: !Sub '${BaseStackName}-GlueRoleArn'
+      GlueVersion: '5.0'
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Connections:
+        Connections:
+          - Fn::ImportValue: !Sub '${BaseStackName}-GlueConnectionName'
+      Command:
+        Name: gluestreaming
+        PythonVersion: '3'
+        ScriptLocation: !Sub
+          - s3://${Bucket}/${ScriptKey}
+          - Bucket:
+              Fn::ImportValue: !Sub '${BaseStackName}-BucketName'
+      DefaultArguments:
+        '--job-language': python
+        '--enable-metrics': 'true'
+        '--enable-continuous-cloudwatch-log': 'true'
+        '--enable-glue-datacatalog': 'true'
+        '--bootstrap-servers': !Ref SourceBootstrapIam
+        '--topic': !Ref KafkaTopic
+        '--checkpoint-location': !Sub
+          - s3://${Bucket}/checkpoints/phase1/
+          - Bucket:
+              Fn::ImportValue: !Sub '${BaseStackName}-BucketName'
+        '--output-location': !Sub
+          - s3://${Bucket}/output/phase1/
+          - Bucket:
+              Fn::ImportValue: !Sub '${BaseStackName}-BucketName'
+        '--starting-offsets': earliest
+        '--extra-jars': !Sub
+          - s3://${Bucket}/${IamAuthJarKey}
+          - Bucket:
+              Fn::ImportValue: !Sub '${BaseStackName}-BucketName'
+
+  PhaseTwoJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub ${ProjectName}-phase2-target
+      Role:
+        Fn::ImportValue: !Sub '${BaseStackName}-GlueRoleArn'
+      GlueVersion: '5.0'
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Connections:
+        Connections:
+          - Fn::ImportValue: !Sub '${BaseStackName}-GlueConnectionName'
+      Command:
+        Name: gluestreaming
+        PythonVersion: '3'
+        ScriptLocation: !Sub
+          - s3://${Bucket}/${ScriptKey}
+          - Bucket:
+              Fn::ImportValue: !Sub '${BaseStackName}-BucketName'
+      DefaultArguments:
+        '--job-language': python
+        '--enable-metrics': 'true'
+        '--enable-continuous-cloudwatch-log': 'true'
+        '--enable-glue-datacatalog': 'true'
+        '--bootstrap-servers': !Ref TargetBootstrapIam
+        '--topic': !Ref KafkaTopic
+        '--checkpoint-location': !Sub
+          - s3://${Bucket}/checkpoints/phase2-translated/
+          - Bucket:
+              Fn::ImportValue: !Sub '${BaseStackName}-BucketName'
+        '--output-location': !Sub
+          - s3://${Bucket}/output/phase2/
+          - Bucket:
+              Fn::ImportValue: !Sub '${BaseStackName}-BucketName'
+        '--starting-offsets': earliest
+        '--extra-jars': !Sub
+          - s3://${Bucket}/${IamAuthJarKey}
+          - Bucket:
+              Fn::ImportValue: !Sub '${BaseStackName}-BucketName'
+
+Outputs:
+  Phase1JobName:
+    Value: !Ref PhaseOneJob
+  Phase2JobName:
+    Value: !Ref PhaseTwoJob
