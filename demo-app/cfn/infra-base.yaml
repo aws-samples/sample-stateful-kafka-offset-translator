@@ -34,6 +34,19 @@ Parameters:
     Default: vpc-01884526e588ec0c0
     Description: VPC for the Glue ENIs - must contain GlueSubnetId.
 
+  DemoTopicName:
+    Type: String
+    Default: demo-clickstream
+    Description: Kafka topic the Glue Streaming jobs are allowed to read.
+
+  GlueConsumerGroupPrefix:
+    Type: String
+    Default: offset-translator-demo-
+    Description: >
+      Stable consumer group prefix used by the Glue Streaming jobs (passed to
+      Spark Kafka source as kafka.consumer.groupIdPrefix). The Kafka IAM policy
+      scopes group permissions to this prefix.
+
 Resources:
 
   GlueSecurityGroup:
@@ -65,6 +78,35 @@ Resources:
       SourceSecurityGroupId: !Ref GlueSecurityGroup
       Description: Allow Glue workers to reach MSK brokers on the IAM port.
 
+  DemoLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${ProjectName}-${AWS::AccountId}-${AWS::Region}-logs
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireAccessLogs
+            Status: Enabled
+            ExpirationInDays: 90
+          - Id: AbortIncompleteMpu
+            Status: Enabled
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 }
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
   DemoBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
@@ -76,6 +118,15 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref DemoLogsBucket
+        LogFilePrefix: s3-access/
       LifecycleConfiguration:
         Rules:
           - Id: AbortIncompleteMpu
@@ -128,31 +179,32 @@ Resources:
                 Action:
                   - kafka-cluster:DescribeTopic
                   - kafka-cluster:ReadData
-                  - kafka-cluster:WriteData
-                  - kafka-cluster:CreateTopic
-                  - kafka-cluster:AlterTopic
                 Resource:
                   - !Sub
-                    - arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:topic/${ClusterName}/${ClusterId}/*
+                    - arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:topic/${ClusterName}/${ClusterId}/${DemoTopic}
                     - ClusterName: !Select [1, !Split ['/', !Ref SourceClusterArn]]
                       ClusterId:   !Select [2, !Split ['/', !Ref SourceClusterArn]]
+                      DemoTopic:   !Ref DemoTopicName
                   - !Sub
-                    - arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:topic/${ClusterName}/${ClusterId}/*
+                    - arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:topic/${ClusterName}/${ClusterId}/${DemoTopic}
                     - ClusterName: !Select [1, !Split ['/', !Ref TargetClusterArn]]
                       ClusterId:   !Select [2, !Split ['/', !Ref TargetClusterArn]]
+                      DemoTopic:   !Ref DemoTopicName
               - Effect: Allow
                 Action:
                   - kafka-cluster:AlterGroup
                   - kafka-cluster:DescribeGroup
                 Resource:
                   - !Sub
-                    - arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:group/${ClusterName}/${ClusterId}/*
+                    - arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:group/${ClusterName}/${ClusterId}/${GroupPrefix}*
                     - ClusterName: !Select [1, !Split ['/', !Ref SourceClusterArn]]
                       ClusterId:   !Select [2, !Split ['/', !Ref SourceClusterArn]]
+                      GroupPrefix: !Ref GlueConsumerGroupPrefix
                   - !Sub
-                    - arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:group/${ClusterName}/${ClusterId}/*
+                    - arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:group/${ClusterName}/${ClusterId}/${GroupPrefix}*
                     - ClusterName: !Select [1, !Split ['/', !Ref TargetClusterArn]]
                       ClusterId:   !Select [2, !Split ['/', !Ref TargetClusterArn]]
+                      GroupPrefix: !Ref GlueConsumerGroupPrefix
 
   GlueNetworkConnection:
     Type: AWS::Glue::Connection
@@ -177,3 +229,9 @@ Outputs:
   GlueConnectionName:
     Value: !Ref GlueNetworkConnection
     Export: { Name: !Sub '${AWS::StackName}-GlueConnectionName' }
+  GlueConsumerGroupPrefix:
+    Value: !Ref GlueConsumerGroupPrefix
+    Export: { Name: !Sub '${AWS::StackName}-GlueConsumerGroupPrefix' }
+  DemoTopicName:
+    Value: !Ref DemoTopicName
+    Export: { Name: !Sub '${AWS::StackName}-DemoTopicName' }

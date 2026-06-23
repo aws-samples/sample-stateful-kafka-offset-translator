@@ -58,11 +58,16 @@ BUCKET=$(aws cloudformation describe-stacks --region us-east-1 \
 ```
 aws s3 cp demo-app/glue/stream_kafka_to_s3.py s3://$BUCKET/scripts/
 
-# aws-msk-iam-auth shaded jar - any 2.x release works.
+# aws-msk-iam-auth shaded jar - pinned to v2.2.0. Verify SHA-256 before upload.
+EXPECTED_SHA256=735dd058b81d088e767770d6cc4e7f1a1beea815ced18b66a23b35fd87651e77
 curl -L -o /tmp/aws-msk-iam-auth-2.2.0-all.jar \
   https://github.com/aws/aws-msk-iam-auth/releases/download/v2.2.0/aws-msk-iam-auth-2.2.0-all.jar
+echo "${EXPECTED_SHA256}  /tmp/aws-msk-iam-auth-2.2.0-all.jar" | shasum -a 256 -c -
 aws s3 cp /tmp/aws-msk-iam-auth-2.2.0-all.jar s3://$BUCKET/jars/
 ```
+
+If you need a different version, update both the URL and `EXPECTED_SHA256`
+(also update `IamAuthJarKey` in `cfn/infra-jobs.yaml`).
 
 ### 2b. Deploy the jobs stack
 

@@ -36,6 +36,7 @@ REQUIRED_ARGS = [
     "checkpoint-location",
     "output-location",
     "starting-offsets",
+    "consumer-group-prefix",
 ]
 
 
@@ -59,6 +60,7 @@ def main() -> None:
         .option("kafka.sasl.mechanism", "AWS_MSK_IAM")
         .option("kafka.sasl.jaas.config", iam_jaas)
         .option("kafka.sasl.client.callback.handler.class", iam_handler)
+        .option("groupIdPrefix", args["consumer_group_prefix"])
         .option("failOnDataLoss", "false")
         .load()
     )

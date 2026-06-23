@@ -73,6 +73,8 @@ Resources:
           - Bucket:
               Fn::ImportValue: !Sub '${BaseStackName}-BucketName'
         '--starting-offsets': earliest
+        '--consumer-group-prefix':
+          Fn::ImportValue: !Sub '${BaseStackName}-GlueConsumerGroupPrefix'
         '--extra-jars': !Sub
           - s3://${Bucket}/${IamAuthJarKey}
           - Bucket:
@@ -113,6 +115,8 @@ Resources:
           - Bucket:
               Fn::ImportValue: !Sub '${BaseStackName}-BucketName'
         '--starting-offsets': earliest
+        '--consumer-group-prefix':
+          Fn::ImportValue: !Sub '${BaseStackName}-GlueConsumerGroupPrefix'
         '--extra-jars': !Sub
           - s3://${Bucket}/${IamAuthJarKey}
           - Bucket:
