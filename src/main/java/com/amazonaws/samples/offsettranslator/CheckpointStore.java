@@ -1,4 +1,4 @@
-package com.example.offsettrans;
+package com.amazonaws.samples.offsettranslator;
 
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.core.sync.ResponseTransformer;

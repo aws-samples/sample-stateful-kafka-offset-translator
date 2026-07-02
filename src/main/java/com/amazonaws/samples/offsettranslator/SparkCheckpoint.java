@@ -1,4 +1,4 @@
-package com.example.offsettrans;
+package com.amazonaws.samples.offsettranslator;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;

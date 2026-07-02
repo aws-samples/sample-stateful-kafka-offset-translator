@@ -1,4 +1,4 @@
-package com.example.offsettrans;
+package com.amazonaws.samples.offsettranslator;
 
 import org.apache.kafka.common.TopicPartition;
 

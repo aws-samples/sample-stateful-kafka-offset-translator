@@ -1,6 +1,6 @@
-package com.example.offsettrans.cli;
+package com.amazonaws.samples.offsettranslator.cli;
 
-import com.example.offsettrans.TranslationService;
+import com.amazonaws.samples.offsettranslator.TranslationService;
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.config.SaslConfigs;
@@ -103,12 +103,12 @@ public class Main implements Callable<Integer> {
         boolean verifyHadIssues = false;
         if (resp.verification != null) {
             System.out.println("Verification (one fetch per cluster per partition):");
-            for (com.example.offsettrans.OffsetVerifier.Result v : resp.verification) {
+            for (com.amazonaws.samples.offsettranslator.OffsetVerifier.Result v : resp.verification) {
                 String ts = v.deltaMs == null ? "" : (" deltaMs=" + v.deltaMs);
                 System.out.println("  " + v.tp + " src=" + v.sourceOffset + " tgt=" + v.targetOffset
                         + " -> " + v.verdict + ts + " (" + v.detail + ")");
-                if (v.verdict != com.example.offsettrans.OffsetVerifier.Verdict.EXACT
-                        && v.verdict != com.example.offsettrans.OffsetVerifier.Verdict.BEHIND_BY_MS) {
+                if (v.verdict != com.amazonaws.samples.offsettranslator.OffsetVerifier.Verdict.EXACT
+                        && v.verdict != com.amazonaws.samples.offsettranslator.OffsetVerifier.Verdict.BEHIND_BY_MS) {
                     verifyHadIssues = true;
                 }
             }
