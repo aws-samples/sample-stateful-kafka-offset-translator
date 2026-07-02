@@ -1,93 +1,214 @@
 # stateful-offset-translator
 
+A CLI tool that translates [Spark Structured Streaming](https://spark.apache.org/docs/latest/structured-streaming-programming-guide.html) Kafka checkpoint offsets from a source cluster to a target cluster using [MSK Replicator](https://docs.aws.amazon.com/msk/latest/developerguide/msk-replicator.html) offset-sync records.
 
+When you use MSK Replicator to replicate topics across clusters, consumer group offsets are tracked in an internal `offset-syncs` topic. This tool reads those sync records to map your Spark checkpoint's source-cluster offsets to their equivalent target-cluster offsets, enabling you to resume a Spark Structured Streaming job on the target cluster without reprocessing or data loss.
 
-## Getting started
+## How it works
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+1. Reads the Spark checkpoint's latest (or specified) batch offset file from a local path or S3.
+2. Consumes the MSK Replicator `offset-syncs` topic on the target cluster to build a per-partition translation map.
+3. Writes a new checkpoint offset file with translated offsets to the specified output directory.
+4. Optionally verifies the translation by fetching one record per partition from both clusters and comparing them.
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## Migration workflow
 
-## Add your files
+This tool is intended to be run as part of a controlled cluster migration:
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+1. **Stop your Spark Structured Streaming job** on the source cluster and note the last committed batch ID.
+2. **Ensure MSK Replicator has caught up** — the offset-syncs topic must contain a sample for every topic-partition at or after the checkpoint's offsets. If not, exit code `2` will be returned and you should wait and retry.
+3. **Run this tool** to translate the checkpoint offsets file and write it to a new location.
+4. **Copy the rest of your checkpoint** to the same output directory. The tool only writes `offsets/<batchId>` — you must copy `commits/`, `metadata`, and any other subdirectories yourself:
+   ```bash
+   aws s3 sync s3://my-bucket/spark-checkpoint/ s3://my-bucket/spark-checkpoint-translated/ \
+     --exclude "offsets/*"
+   ```
+5. **Optionally run with `--verify`** to confirm the translated offsets point at the same records on the target cluster.
+6. **Start your Spark job on the target cluster**, pointing it at the translated checkpoint directory.
 
+## Prerequisites
+
+- Java 11+
+- Maven (to build from source)
+- Network access to the target MSK cluster's bootstrap servers
+- IAM permissions to consume from the target cluster and the offset-syncs topic (see [IAM permissions](#iam-permissions))
+
+## IAM permissions
+
+When using `--auth IAM` (the default), the executing principal needs the following permissions:
+
+**Target MSK cluster** (reading the offset-syncs topic):
+```json
+{
+  "Action": [
+    "kafka-cluster:Connect",
+    "kafka-cluster:DescribeTopic",
+    "kafka-cluster:ReadData"
+  ],
+  "Resource": [
+    "arn:aws:kafka:<region>:<account>:cluster/<target-cluster-name>/<cluster-id>",
+    "arn:aws:kafka:<region>:<account>:topic/<target-cluster-name>/<cluster-id>/mskr-offset-syncs.*"
+  ]
+}
 ```
-cd existing_repo
-git remote add origin https://gitlab.aws.dev/mmehrten/stateful-offset-translator.git
-git branch -M main
-git push -uf origin main
+
+**S3** (when checkpoint paths are `s3://...`):
+```json
+{
+  "Action": [
+    "s3:GetObject",
+    "s3:ListBucket"
+  ],
+  "Resource": "<source-checkpoint-bucket-and-prefix>"
+}
+```
+```json
+{
+  "Action": [
+    "s3:PutObject"
+  ],
+  "Resource": "<output-checkpoint-bucket-and-prefix>"
+}
 ```
 
-## Integrate with your tools
+When using `--verify`, the same `kafka-cluster:Connect`, `kafka-cluster:DescribeTopic`, and `kafka-cluster:ReadData` permissions are also required on the **source** cluster and the replicated topic(s).
 
-- [ ] [Set up project integrations](https://gitlab.aws.dev/mmehrten/stateful-offset-translator/-/settings/integrations)
+## Building
 
-## Collaborate with your team
+```bash
+mvn package -q
+```
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+This produces `target/offset-translator-<version>-all.jar` (a shaded uber-jar).
 
 ## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+
+```
+java -jar target/offset-translator-*-all.jar \
+  --checkpoint-dir   <source-checkpoint-path>   \
+  --output-dir       <output-checkpoint-path>   \
+  --bootstrap-servers <target-cluster-bootstrap> \
+  --offset-syncs-topic mskr-offset-syncs.<replicator-id>.internal
+```
+
+### Options
+
+| Option | Required | Description |
+|--------|----------|-------------|
+| `--checkpoint-dir` | Yes | Source Spark checkpoint root — local path or `s3://...` |
+| `--output-dir` | Yes | Where to write the translated checkpoint — local path or `s3://...` |
+| `--bootstrap-servers` | Yes | Bootstrap servers of the **target** MSK cluster |
+| `--offset-syncs-topic` | Yes | Offset-syncs topic name, e.g. `mskr-offset-syncs.<id>.internal` |
+| `--batch-id` | No | Specific batch ID to translate; defaults to the latest in `offsets/` |
+| `--auth` | No | Auth mode: `IAM` (default), `PLAINTEXT` |
+| `--consumer-prop` | No | Override or add a consumer property: `key=value` (repeatable) |
+| `--verify` | No | After translating, fetch one record per partition from each cluster and compare |
+| `--source-bootstrap-servers` | With `--verify` | Bootstrap servers of the **source** cluster |
+| `--source-auth` | No | Auth mode for the source cluster; defaults to `--auth` |
+| `--source-consumer-prop` | No | Override or add a **source** consumer property: `key=value` (repeatable) |
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success — all partitions translated |
+| `2` | Some partitions could not be mapped (no offset-sync sample found yet — MSK Replicator has not caught up) |
+| `3` | Translation succeeded but `--verify` found mismatches |
+
+### Verification verdicts
+
+When `--verify` is used, each partition is assigned one of the following verdicts:
+
+| Verdict | Meaning | Safe to proceed? |
+|---------|---------|-----------------|
+| `EXACT` | Source and target records have identical key, value, and timestamp. The job will resume with no overlap and no gap. | Yes |
+| `BEHIND_BY_MS` | Target record timestamp is older than source. Translation is conservative (at-least-once). The job will re-read a small number of records on resume. | Yes — expect minor duplicates |
+| `AHEAD_BY_MS` | Target record timestamp is newer than source, or key/value differs. Likely a topic-recreation or compaction event. The job would skip data. | No — investigate before proceeding |
+| `TARGET_OFFSET_OUT_OF_RANGE` | The translated offset is past the target cluster's high-water mark. Replication has not yet caught up to this offset. | No — wait for replication to catch up |
+| `SOURCE_OFFSET_OUT_OF_RANGE` | The source offset is past the source cluster's high-water mark. Should not happen for a committed Spark checkpoint. | No — investigate |
+| `TIMEOUT` | No record was returned within the per-partition fetch budget (default 15 s). | Retry or investigate connectivity |
+
+### Examples
+
+**Translate latest checkpoint using IAM auth (default):**
+
+```bash
+java -jar offset-translator-*-all.jar \
+  --checkpoint-dir s3://my-bucket/spark-checkpoint \
+  --output-dir s3://my-bucket/spark-checkpoint-translated \
+  --bootstrap-servers b-1.my-target-cluster.abc123.kafka.us-east-1.amazonaws.com:9098 \
+  --offset-syncs-topic mskr-offset-syncs.abcd1234.internal
+```
+
+**Translate and verify:**
+
+```bash
+java -jar offset-translator-*-all.jar \
+  --checkpoint-dir s3://my-bucket/spark-checkpoint \
+  --output-dir /tmp/translated-checkpoint \
+  --bootstrap-servers b-1.target.abc.kafka.us-east-1.amazonaws.com:9098 \
+  --offset-syncs-topic mskr-offset-syncs.abcd1234.internal \
+  --verify \
+  --source-bootstrap-servers b-1.source.xyz.kafka.us-east-1.amazonaws.com:9098
+```
+
+**Use PLAINTEXT auth (e.g., local testing):**
+
+```bash
+java -jar offset-translator-*-all.jar \
+  --checkpoint-dir /tmp/spark-checkpoint \
+  --output-dir /tmp/translated \
+  --bootstrap-servers localhost:9092 \
+  --offset-syncs-topic mskr-offset-syncs.test.internal \
+  --auth PLAINTEXT
+```
+
+## Limitations
+
+- **One offsets file per run.** The tool translates a single `offsets/<batchId>` file. For Spark queries with multiple Kafka sources, Spark writes one offsets file per source under different sub-paths — run the tool once for each source's checkpoint path.
+- **Output is a partial checkpoint.** Only `offsets/<batchId>` is written to `--output-dir`. You must copy the rest of the checkpoint directory (`commits/`, `metadata`, etc.) separately before pointing a Spark job at the output. See [Migration workflow](#migration-workflow).
+- **Translation requires at least one offset-sync sample.** If MSK Replicator has not yet synced a given partition at or beyond the checkpoint offset, that partition will be reported as unmapped (exit code `2`). Wait for replication to advance and re-run.
+
+## References
+
+- [MSK Migration Lab](https://catalog.workshops.aws/msk-migration-lab) — step-by-step workshop for spinning up two MSK clusters, configuring MSK Replicator for bidirectional replication, and migrating consumer workloads between clusters. The `demo-app/` in this repository is built against the lab environment.
+
+## Demo app
+
+`demo-app/` contains a full end-to-end demo that exercises the tool against a live bidirectional MSK Replicator lab environment. See [`demo-app/README.md`](demo-app/README.md) for the complete runbook.
+
+**What's included:**
+
+| Path | Description |
+|------|-------------|
+| `cfn/infra-base.yaml` | CloudFormation stack — S3 bucket, IAM role for Glue, Glue NETWORK connection into the MSK VPC |
+| `cfn/infra-jobs.yaml` | CloudFormation stack — two Glue Streaming jobs (deploy after uploading the script) |
+| `glue/stream_kafka_to_s3.py` | Spark Structured Streaming script used by both jobs; reads from Kafka via IAM auth and writes Parquet to S3 |
+| `producer/clickstream_producer.py` | Constant-rate synthetic clickstream producer (IAM auth); generates `user_id`-keyed JSON events |
+
+**Demo flow summary:**
+
+1. Deploy the base CFN stack (bucket, IAM role, Glue connection).
+2. Upload the Glue script and MSK IAM auth jar to S3.
+3. Deploy the jobs CFN stack.
+4. Run the producer on a KafkaClientEC2 instance to generate traffic.
+5. Run the Phase 1 Glue job (reads from the **source** cluster, writes a real Spark checkpoint to S3).
+6. Run the translator to rewrite the checkpoint offsets for the **target** cluster.
+7. Run the Phase 2 Glue job (resumes from the translated checkpoint on the **target** cluster).
+8. Compare `output/phase1/` and `output/phase2/` in S3 to confirm no gap and minimal overlap.
 
 ## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+Please open a [GitHub issue](../../issues) to report bugs, request features, or ask questions.
 
 ## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to contribute to this project.
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+## Security
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+If you discover a potential security issue, please notify AWS/Amazon Security via the [vulnerability reporting page](http://aws.amazon.com/security/vulnerability-reporting/) rather than opening a public GitHub issue.
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+This project is licensed under the MIT No Attribution License. See the [LICENSE](LICENSE) file for details.
