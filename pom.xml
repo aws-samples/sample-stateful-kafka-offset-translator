@@ -20,7 +20,7 @@
         <kafka.version>3.7.1</kafka.version>
         <aws.sdk.version>2.27.21</aws.sdk.version>
         <picocli.version>4.7.6</picocli.version>
-        <jackson.version>2.17.2</jackson.version>
+        <jackson.version>2.18.10</jackson.version>
         <slf4j.version>2.0.13</slf4j.version>
         <msk.iam.auth.version>2.2.0</msk.iam.auth.version>
     </properties>
